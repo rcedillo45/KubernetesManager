@@ -8,6 +8,7 @@ Kubernetes Management Tool
 """
 
 import sys
+from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import Qt, QAbstractTableModel
 from PyQt6.QtWidgets import (
     QApplication, 
@@ -96,11 +97,23 @@ class TableModel(QAbstractTableModel):
     def __init__(self, data):
         super(TableModel, self).__init__()
         self._data = data
+        self.closed = []
+        self.down = []
 
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
             value = self._data.iloc[index.row(), index.column()]
             return str(value)
+        if role == Qt.ItemDataRole.BackgroundRole:
+            value = self._data.iloc[index.row(), index.column()]
+            if str(value) == "0/0":
+                self.closed.append(index.row())
+            elif str(value).startswith("0"):
+                self.down.append(index.row())
+            if index.row() in self.down:
+                return QColor(255, 100, 100)
+            if index.row() in self.closed:
+                return QColor(100, 100, 100)
 
     def rowCount(self, index):
         return self._data.shape[0]
@@ -152,6 +165,12 @@ class MainWindow(QWidget):
         #open file and show deployment info
         file_open_btn = QPushButton('Open')
         file_open_btn.clicked.connect(self.open_file)
+        #button to show deployment information
+        deployments_btn = QPushButton('Deployments')
+        deployments_btn.setFixedWidth(100)
+        #button to show configmap information
+        configmap_btn = QPushButton('Configmaps')
+        configmap_btn.setFixedWidth(100)
         #apply button, apply changes to kubernetes cluster
         apply_btn = QPushButton('Apply')
         #creates textbox that shows file selected
@@ -162,8 +181,10 @@ class MainWindow(QWidget):
         layout.addWidget(self.file_list, 0, 1)
         layout.addWidget(file_open_btn, 0 ,2)
         layout.addWidget(file_browser_btn, 0 ,3)
-        layout.addWidget(self.table, 1, 0, 1, 4)
-        layout.addWidget(apply_btn, 2, 3)
+        layout.addWidget(deployments_btn, 1, 0)
+        layout.addWidget(configmap_btn, 1, 1)
+        layout.addWidget(self.table, 2, 0, 2, 4)
+        layout.addWidget(apply_btn, 3, 3)
         
         self.show()
 
