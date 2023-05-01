@@ -32,6 +32,7 @@ class Kube:
         #loading necessary api clients
         self.core_api = client.CoreV1Api()
         self.app_api = client.AppsV1Api()
+        self.networkapi = client.NetworkingV1Api()
         
     def getDeployments(self):
         #grab list of deployments
@@ -39,8 +40,14 @@ class Kube:
         #grab list of services
         services = self.core_api.list_namespaced_service('application').items
         #this list will be returned
+        networks = self.networkapi.list_ingress_for_all_namespaces()
+        all_networks = []
+        for network in networks.items:
+            for rule in network.spec.rules:
+                all_networks.append(rule)
         deployment_list = []
         for dep in deps:
+            host = None
             cm_list = []
             ports = ''
             port_dict = {'app_protocol': [], 'name': [], 'node_port': [], 'port': [], 'protocol': [], 'target_port': []}
@@ -48,14 +55,16 @@ class Kube:
             container = dep.spec.template.spec.containers[0]
             #loop through services and grab the service that matches container
             for service in services:
-                if container.name in service.metadata.name:
+                if container.name == list(service.spec.selector.values())[0]:
                     ports = service.spec.ports
                     for port in ports:
                         current_port = port.to_dict()
                         for key, value in current_port.items():
                             port_dict[key].append(value)
-                        
-                    
+                    for network in all_networks:
+                        if service.metadata.name == network.http.paths[0].backend.service.name:
+                            host = network.host
+            
             #this will get replica status, that shows what containers are running
             try:
                 status = dep.status
@@ -82,6 +91,7 @@ class Kube:
                 container.image,
                 cm_list,
                 replica_status,
+                host,
                 port_dict['app_protocol'],
                 port_dict['name'],
                 port_dict['node_port'],
@@ -141,7 +151,46 @@ class TableModel(QAbstractTableModel):
 
         return False
 
+class DeploymentWindow(QWidget):
+    """
+    This "window" is a QWidget. If it has no parent,
+    it will appear as a free-floating window.
+    """
 
+    def __init__(self):
+        super().__init__()
+        layout = QGridLayout()
+        self.table = QTableView()
+        #create data table used in making the table
+        data = pd.DataFrame(kube.getDeployments(), columns = 
+                            ['Deployment', 'Image', 'ConfigMap', 'Status', 'Host',
+                             'app protocol', 'port name', 'node_port', 'port', 'protocol', 'target port'])
+        self.model = TableModel(data)
+        self.table.setModel(self.model)
+        self.table.resizeColumnsToContents()
+        layout.addWidget(self.table)
+        self.setLayout(layout)
+
+class ConfigWindow(QWidget):
+    """
+    This "window" is a QWidget. If it has no parent,
+    it will appear as a free-floating window.
+    """
+
+    def __init__(self):
+        super().__init__()
+        layout = QGridLayout()
+        self.table = QTableView()
+        #create data table used in making the table
+        data = pd.DataFrame(kube.getDeployments(), columns = 
+                            ['Deployment', 'Image', 'ConfigMap', 'Status', 'Host' 
+                             'app protocol', 'port name', 'node_port', 'port', 'protocol', 'target port'])
+        self.model = TableModel(data)
+        self.table.setModel(self.model)
+        self.table.resizeColumnsToContents()
+        layout.addWidget(self.table)
+        self.setLayout(layout)
+        
 class MainWindow(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -149,16 +198,11 @@ class MainWindow(QWidget):
         self.filename = None
         #main window settings
         self.setWindowTitle('Kubernetes Manager')
-        self.setGeometry(100, 100, 1280, 720)
-        #table settings
-        self.table = QTableView()
+        self.setGeometry(100, 100, 600, 100)
         #layout for config file stuff
         layout = QGridLayout()
         self.setLayout(layout)
         self.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        #table settings
-        self.table.setShowGrid(False)
         # file selection
         file_browser_btn = QPushButton('Browse')
         file_browser_btn.clicked.connect(self.open_file_dialog)
@@ -168,9 +212,11 @@ class MainWindow(QWidget):
         #button to show deployment information
         deployments_btn = QPushButton('Deployments')
         deployments_btn.setFixedWidth(100)
+        deployments_btn.clicked.connect(self.open_deployments)
         #button to show configmap information
         configmap_btn = QPushButton('Configmaps')
         configmap_btn.setFixedWidth(100)
+        configmap_btn.clicked.connect(self.open_configmap)
         #apply button, apply changes to kubernetes cluster
         apply_btn = QPushButton('Apply')
         #creates textbox that shows file selected
@@ -183,10 +229,7 @@ class MainWindow(QWidget):
         layout.addWidget(file_browser_btn, 0 ,3)
         layout.addWidget(deployments_btn, 1, 0)
         layout.addWidget(configmap_btn, 1, 1)
-        layout.addWidget(self.table, 2, 0, 2, 4)
-        layout.addWidget(apply_btn, 3, 3)
-        
-        self.show()
+        layout.addWidget(apply_btn, 2, 3)
 
     def open_file_dialog(self):
         dialog = QFileDialog(self)
@@ -202,17 +245,19 @@ class MainWindow(QWidget):
     
     def open_file(self):
         #initialize kubernetes class
+        global kube
         kube = Kube(self.filename)
-        #create data table used in making the table
-        data = pd.DataFrame(kube.getDeployments(), columns = 
-                            ['Deployment', 'Image', 'ConfigMap', 'Status', 
-                             'app protocol', 'port name', 'node_port', 'port', 'protocol', 'target port'])
-        self.model = TableModel(data)
-        self.table.setModel(self.model)
-        self.table.resizeColumnsToContents()
-        
+    
+    def open_deployments(self, checked):
+        self.w = DeploymentWindow()
+        self.w.show()
+    
+    def open_configmap(self, checked):
+        self.w = ConfigWindow()
+        self.w.show()
         
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
+    window.show()
     sys.exit(app.exec())
