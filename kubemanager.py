@@ -18,7 +18,9 @@ from PyQt6.QtWidgets import (
     QPushButton, 
     QLabel,
     QListWidget,
-    QTableView
+    QTableView,
+    QMenu,
+    QVBoxLayout
 )
 from pathlib import Path
 import pandas as pd
@@ -100,6 +102,16 @@ class Kube:
                 port_dict['target_port']
                 ])
         return deployment_list
+    
+    def getConfigMap(self):
+        print(1)
+        
+    def getCMnames(self):
+        cm_list = self.core_api.list_config_map_for_all_namespaces().items
+        names = []
+        for cm in cm_list:
+            names.append(cm.metadata.name)
+        return names
         
 
 class TableModel(QAbstractTableModel):
@@ -179,16 +191,16 @@ class ConfigWindow(QWidget):
 
     def __init__(self):
         super().__init__()
-        layout = QGridLayout()
-        self.table = QTableView()
-        #create data table used in making the table
-        data = pd.DataFrame(kube.getDeployments(), columns = 
-                            ['Deployment', 'Image', 'ConfigMap', 'Status', 'Host' 
-                             'app protocol', 'port name', 'node_port', 'port', 'protocol', 'target port'])
-        self.model = TableModel(data)
-        self.table.setModel(self.model)
-        self.table.resizeColumnsToContents()
-        layout.addWidget(self.table)
+        self.btnOne = QPushButton(text="Select a Configmap", parent=self)
+        self.menu = QMenu(self)
+        cm_list = kube.getCMnames()
+        for name in cm_list:
+            self.menu.addAction(name)
+            
+        self.btnOne.setMenu(self.menu)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.btnOne)
         self.setLayout(layout)
         
 class MainWindow(QWidget):
