@@ -8,7 +8,7 @@ Kubernetes Management Tool
 """
 
 import sys
-from PyQt6.QtGui import QColor, QBrush
+from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt, QAbstractTableModel
 from PyQt6.QtWidgets import (
     QApplication, 
@@ -18,9 +18,9 @@ from PyQt6.QtWidgets import (
     QPushButton, 
     QLabel,
     QListWidget,
-    QTableView,
     QMenu,
-    QVBoxLayout
+    QTableWidget,
+    QTableWidgetItem,
 )
 from pathlib import Path
 import pandas as pd
@@ -103,8 +103,14 @@ class Kube:
                 ])
         return deployment_list
     
-    def getConfigMap(self):
-        print(1)
+    def getConfigMap(self, name):
+        cm_list = self.core_api.list_config_map_for_all_namespaces().items
+        for cm in cm_list:
+            if cm.metadata.name == name:
+                config_map_data = list(cm.data.items())
+                return config_map_data
+        return []  # Return an empty list if config map not found
+
         
     def getCMnames(self):
         cm_list = self.core_api.list_config_map_for_all_namespaces().items
@@ -144,7 +150,7 @@ class TableModel(QAbstractTableModel):
         return self._data.shape[1]
     #this allows user to edit fields on table
     def flags(self, index):
-        return Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
+        return Qt.ItemFlag.ItemIsSelectable
     
     def headerData(self, section, orientation, role):
         # section is the index of the column/row.
@@ -164,44 +170,60 @@ class TableModel(QAbstractTableModel):
         return False
 
 class DeploymentWindow(QWidget):
-    """
-    This "window" is a QWidget. If it has no parent,
-    it will appear as a free-floating window.
-    """
-
     def __init__(self):
         super().__init__()
         layout = QGridLayout()
-        self.table = QTableView()
-        #create data table used in making the table
-        data = pd.DataFrame(kube.getDeployments(), columns = 
-                            ['Deployment', 'Image', 'ConfigMap', 'Status', 'Host',
-                             'app protocol', 'port name', 'node_port', 'port', 'protocol', 'target port'])
-        self.model = TableModel(data)
-        self.table.setModel(self.model)
+        self.table = QTableWidget()
+        data = pd.DataFrame(kube.getDeployments(), columns=['Deployment', 'Image', 'ConfigMap', 'Status', 'Host',
+                                                            'app protocol', 'port name', 'node_port', 'port', 'protocol', 'target port'])
+
+        self.table.setRowCount(data.shape[0])
+        self.table.setColumnCount(data.shape[1])
+        self.table.setHorizontalHeaderLabels(data.columns)
+
+        for row_idx, row_data in data.iterrows():
+            for col_idx, cell_data in enumerate(row_data):
+                item = QTableWidgetItem(str(cell_data))
+                self.table.setItem(row_idx, col_idx, item)
+
         self.table.resizeColumnsToContents()
         layout.addWidget(self.table)
         self.setLayout(layout)
 
 class ConfigWindow(QWidget):
-    """
-    This "window" is a QWidget. If it has no parent,
-    it will appear as a free-floating window.
-    """
-
     def __init__(self):
         super().__init__()
         self.btnOne = QPushButton(text="Select a Configmap", parent=self)
         self.menu = QMenu(self)
         cm_list = kube.getCMnames()
         for name in cm_list:
-            self.menu.addAction(name)
+            action = self.menu.addAction(name)
+            action.triggered.connect(lambda checked, name=name: self.menu_option_selected(name))
             
         self.btnOne.setMenu(self.menu)
 
-        layout = QVBoxLayout()
+        layout = QGridLayout()
         layout.addWidget(self.btnOne)
         self.setLayout(layout)
+        
+        self.cmTable = QTableWidget(self)
+        layout.addWidget(self.cmTable)
+        
+    def menu_option_selected(self, option_name):
+        data = pd.DataFrame(kube.getConfigMap(option_name), columns=['Key', 'Value'])
+
+        self.cmTable.clearContents()
+        self.cmTable.setRowCount(0)
+
+        self.cmTable.setRowCount(data.shape[0])
+        self.cmTable.setColumnCount(data.shape[1])
+
+        for row_idx, row_data in data.iterrows():
+            for col_idx, cell_data in enumerate(row_data):
+                item = QTableWidgetItem(str(cell_data))
+                self.cmTable.setItem(row_idx, col_idx, item)
+
+        self.cmTable.resizeColumnsToContents()
         
 class MainWindow(QWidget):
     def __init__(self, *args, **kwargs):
