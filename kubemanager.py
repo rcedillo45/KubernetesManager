@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 from pathlib import Path
 import pandas as pd
 from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 class Kube:
     def __init__(self, path):
@@ -106,9 +107,12 @@ class Kube:
     def getConfigMap(self, name):
         cm_list = self.core_api.list_config_map_for_all_namespaces().items
         for cm in cm_list:
-            if cm.metadata.name == name:
-                config_map_data = list(cm.data.items())
-                return config_map_data
+            try:
+                if cm.metadata.name == name:
+                    config_map_data = list(cm.data.items())
+                    return config_map_data
+            except:
+                pass
         return []  # Return an empty list if config map not found
 
         
@@ -118,56 +122,36 @@ class Kube:
         for cm in cm_list:
             names.append(cm.metadata.name)
         return names
-        
-
-class TableModel(QAbstractTableModel):
-
-    def __init__(self, data):
-        super(TableModel, self).__init__()
-        self._data = data
-        self.closed = []
-        self.down = []
-
-    def data(self, index, role):
-        if role == Qt.ItemDataRole.DisplayRole:
-            value = self._data.iloc[index.row(), index.column()]
-            return str(value)
-        if role == Qt.ItemDataRole.BackgroundRole:
-            value = self._data.iloc[index.row(), index.column()]
-            if str(value) == "0/0":
-                self.closed.append(index.row())
-            elif str(value).startswith("0"):
-                self.down.append(index.row())
-            if index.row() in self.down:
-                return QColor(255, 100, 100)
-            if index.row() in self.closed:
-                return QColor(100, 100, 100)
-
-    def rowCount(self, index):
-        return self._data.shape[0]
-
-    def columnCount(self, index):
-        return self._data.shape[1]
-    #this allows user to edit fields on table
-    def flags(self, index):
-        return Qt.ItemFlag.ItemIsSelectable
     
-    def headerData(self, section, orientation, role):
-        # section is the index of the column/row.
-        if role == Qt.ItemDataRole.DisplayRole:
-            if orientation == Qt.Orientation.Horizontal:
-                return str(self._data.columns[section])
-            
-            if orientation == Qt.Orientation.Vertical:
-                return str(self._data.index[section])
-    #currently not in use, but this will save changes to data of table       
-    def setData(self, index, value, role):
-        if role == Qt.ItemDataRole.EditRole:
-            # Set the value into the frame.
-            self._data.iloc[index.row(), index.column()] = value
-            return True
-
-        return False
+    def update_config_map_data(self, config_map_name, data):
+        # Retrieve all namespaces
+        try:
+            namespaces = self.core_api.list_namespace().items
+            print(config_map_name)
+        except ApiException as e:
+            print(f"Error retrieving namespaces: {e}")
+            return False
+    
+        # Iterate over each namespace and update the ConfigMap
+        for namespace in namespaces:
+            # Read the existing ConfigMap
+            try:
+                config_map = self.core_api.read_namespaced_config_map(config_map_name, namespace.metadata.name)
+            except ApiException as e:
+                print(f"Error reading ConfigMap in namespace {namespace.metadata.name}: {e}")
+                continue
+    
+            # Update the data in the ConfigMap
+            config_map.data = data
+    
+            # Update the ConfigMap on the Kubernetes server
+            try:
+                self.core_api.replace_namespaced_config_map(config_map_name, namespace.metadata.name, body=config_map)
+                print(f"ConfigMap {config_map_name} updated in namespace {namespace.metadata.name}")
+            except ApiException as e:
+                print(f"Error updating ConfigMap in namespace {namespace.metadata.name}: {e}")
+    
+        return True
 
 class DeploymentWindow(QWidget):
     def __init__(self):
@@ -193,6 +177,9 @@ class DeploymentWindow(QWidget):
 class ConfigWindow(QWidget):
     def __init__(self):
         super().__init__()
+        self.selected_config_map = None
+        self.original_data = None  # Original data from the config map
+        self.modified_data = None  # Modified data in the table
         self.btnOne = QPushButton(text="Select a Configmap", parent=self)
         self.menu = QMenu(self)
         cm_list = kube.getCMnames()
@@ -206,29 +193,68 @@ class ConfigWindow(QWidget):
         layout.addWidget(self.btnOne)
         self.setLayout(layout)
         
-        self.cmTable = QTableWidget(self)
-        layout.addWidget(self.cmTable)
+        self.table = QTableWidget(self)
+        layout.addWidget(self.table)
+        
+        self.apply_button = QPushButton("Apply Changes")
+        self.apply_button.clicked.connect(self.apply_changes)
+        layout.addWidget(self.apply_button)
+        
+        # Connect cellChanged signal to update_modified_data slot
+        self.table.cellChanged.connect(self.update_modified_data)
         
     def menu_option_selected(self, option_name):
-        data = pd.DataFrame(kube.getConfigMap(option_name), columns=['Key', 'Value'])
-
-        self.cmTable.clearContents()
-        self.cmTable.setRowCount(0)
-
-        self.cmTable.setRowCount(data.shape[0])
-        self.cmTable.setColumnCount(data.shape[1])
-
-        for row_idx, row_data in data.iterrows():
+        self.selected_config_map = option_name
+        self.original_data = pd.DataFrame(kube.getConfigMap(option_name), columns=['Key', 'Value'])
+        
+        self.table.clearContents()
+        self.table.setRowCount(0)
+    
+        self.table.setRowCount(self.original_data.shape[0])
+        self.table.setColumnCount(self.original_data.shape[1])
+    
+        for row_idx, row_data in self.original_data.iterrows():
             for col_idx, cell_data in enumerate(row_data):
                 item = QTableWidgetItem(str(cell_data))
-                self.cmTable.setItem(row_idx, col_idx, item)
-
-        self.cmTable.resizeColumnsToContents()
+                self.table.setItem(row_idx, col_idx, item)
+    
+        self.table.resizeColumnsToContents()
         
+        # Initialize modified_data as a copy of original_data
+        self.modified_data = self.original_data
+        
+    def update_modified_data(self, row, column):
+        if self.modified_data is not None:
+            # Get the modified value from the cell
+            item = self.table.item(row, column)
+            if item is not None:
+                modified_value = item.text()
+                
+                # Update the corresponding cell in modified_data
+                self.modified_data.iloc[row, column] = modified_value
+            else:
+                # Handle case when the item is None (e.g., cell was cleared)
+                self.modified_data.iloc[row, column] = ""
+            print(self.modified_data)
+        
+    def apply_changes(self):
+        if not self.selected_config_map:
+            print("No ConfigMap selected.")
+            return
+
+        print(self.selected_config_map)
+        print(self.modified_data)
+
+        success = kube.update_config_map_data(self.selected_config_map, self.modified_data.set_index('Key').squeeze().to_dict())
+        
+        if success:
+            print(f"ConfigMap '{self.selected_config_map}' updated successfully")
+        else:
+            print(f"Failed to update ConfigMap '{self.selected_config_map}'")
+
 class MainWindow(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        #self.kube = Kube("~/Documents/Devops/configs/MAI/microai_stg_config")
         self.filename = None
         #main window settings
         self.setWindowTitle('Kubernetes Manager')
