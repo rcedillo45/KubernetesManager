@@ -8,8 +8,7 @@ Kubernetes Management Tool
 """
 
 import sys
-from PyQt6.QtGui import QColor
-from PyQt6.QtCore import Qt, QAbstractTableModel
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication, 
     QWidget, 
